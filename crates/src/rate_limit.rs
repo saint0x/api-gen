@@ -1,31 +1,36 @@
-use thiserror::Error;
-use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
+use dashmap::DashMap;
+use thiserror::Error;
 use crate::storage::ApiKeyStorage;
+use async_trait::async_trait;
 
-#[derive(Error, Debug)]
-pub enum RateLimitError {
-    #[error("Rate limit exceeded")]
-    RateLimitExceeded,
-    #[error("Invalid rate limit configuration")]
-    InvalidConfig,
-    #[error("Storage error")]
-    StorageError,
-    #[error("Invalid API key")]
-    InvalidKey,
+/// Trait for providing time, allowing for test mocking
+pub trait TimeProvider: Send + Sync + std::fmt::Debug {
+    fn current_time(&self) -> i64;
+}
+
+#[derive(Debug)]
+pub struct SystemTimeProvider;
+
+impl TimeProvider for SystemTimeProvider {
+    fn current_time(&self) -> i64 {
+        Utc::now().timestamp()
+    }
 }
 
 /// Configuration for rate limiting
 #[derive(Debug, Clone)]
 pub struct RateLimitConfig {
     /// Maximum number of requests allowed in the window
-    pub max_requests: u32,
-    /// Time window for rate limiting (e.g., 1 minute, 1 hour)
+    pub max_requests: i64,
+    /// Time window for rate limiting
     pub window: Duration,
-    /// Maximum burst size allowed
-    pub burst_size: u32,
+    /// Maximum number of requests allowed in a burst (per second)
+    pub burst_size: i64,
+    /// Rate at which tokens are refilled (tokens per second)
+    pub refill_rate: i64,
 }
 
 impl Default for RateLimitConfig {
@@ -33,145 +38,195 @@ impl Default for RateLimitConfig {
         Self {
             max_requests: 100,
             window: Duration::minutes(1),
-            burst_size: 100,
+            burst_size: 10,
+            refill_rate: 10, // 10 tokens per second
         }
     }
 }
 
-/// Represents a rate limit counter for a specific key
-#[derive(Debug, Clone)]
-struct RateLimitCounter {
-    /// Current count of requests in the window
-    count: u32,
-    /// When the current window started
-    window_start: DateTime<Utc>,
-    /// When the counter was last updated
-    last_updated: DateTime<Utc>,
-    /// Current burst count
-    burst_count: u32,
-    /// When the current burst window started
-    burst_start: DateTime<Utc>,
+/// Internal state for rate limiting
+#[derive(Debug)]
+pub struct RateLimitState {
+    // Fixed Window Counter
+    window_start: AtomicI64,
+    request_count: AtomicI64,
+    
+    // Token Bucket
+    tokens: AtomicI64,
+    last_refill: AtomicI64,
 }
 
-impl RateLimitCounter {
-    fn new() -> Self {
-        let now = Utc::now();
+impl RateLimitState {
+    fn new(now: i64) -> Self {
         Self {
-            count: 0,
-            window_start: now,
-            last_updated: now,
-            burst_count: 0,
-            burst_start: now,
+            window_start: AtomicI64::new(now),
+            request_count: AtomicI64::new(0),
+            tokens: AtomicI64::new(0),
+            last_refill: AtomicI64::new(now),
         }
     }
 
-    fn is_window_expired(&self, window: Duration) -> bool {
-        Utc::now() - self.window_start > window
+    fn refill_tokens(&self, now: i64, refill_rate: i64, burst_size: i64) -> i64 {
+        let elapsed = now - self.last_refill.load(Ordering::Relaxed);
+        let new_tokens = elapsed * refill_rate;
+        let current = self.tokens.load(Ordering::Relaxed);
+        
+        // When current is negative, we need more tokens to get back to positive
+        let updated = if current < 0 {
+            // We need abs(current) tokens just to get back to 0
+            // Then we can add any remaining tokens up to burst_size
+            let tokens_to_zero = -current;
+            if new_tokens <= tokens_to_zero {
+                current + new_tokens // Still negative or zero
+            } else {
+                // We have tokens remaining after getting to zero
+                let remaining_tokens = new_tokens - tokens_to_zero;
+                remaining_tokens.min(burst_size)
+            }
+        } else {
+            (current + new_tokens).min(burst_size)
+        };
+        
+        self.tokens.store(updated, Ordering::Relaxed);
+        self.last_refill.store(now, Ordering::Relaxed);
+        updated
     }
 
-    fn is_burst_expired(&self, burst_window: Duration) -> bool {
-        Utc::now() - self.burst_start > burst_window
-    }
-
-    fn reset(&mut self) {
-        let now = Utc::now();
-        self.count = 0;
-        self.window_start = now;
-        self.last_updated = now;
-        self.burst_count = 0;
-        self.burst_start = now;
-    }
-
-    fn increment(&mut self) {
-        let now = Utc::now();
-        self.count += 1;
-        self.last_updated = now;
-
-        // Reset burst counter if burst window has expired
-        if self.is_burst_expired(Duration::seconds(1)) {
-            self.burst_count = 0;
-            self.burst_start = now;
+    fn check_window(&self, now: i64, window_size: i64, max_requests: i64) -> bool {
+        let window_start = self.window_start.load(Ordering::Relaxed);
+        if now - window_start >= window_size {
+            self.window_start.store(now, Ordering::Relaxed);
+            self.request_count.store(0, Ordering::Relaxed);
         }
-        self.burst_count += 1;
+        self.request_count.load(Ordering::Relaxed) < max_requests
+    }
+
+    fn increment_counters(&self) {
+        self.request_count.fetch_add(1, Ordering::Relaxed);
+        self.tokens.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
-/// In-memory storage for rate limit counters
-#[derive(Debug, Default)]
-struct InMemoryRateLimitStorage {
-    counters: Arc<RwLock<HashMap<String, RateLimitCounter>>>,
+/// Storage trait for rate limiting
+#[async_trait]
+pub trait RateLimitStorage: Send + Sync + std::fmt::Debug {
+    async fn get_metadata(&self, key: &str) -> Result<(), RateLimitError>;
+    async fn get_state(&self, key: &str) -> Option<Arc<RateLimitState>>;
+    async fn set_state(&self, key: &str, state: Arc<RateLimitState>);
+}
+
+/// In-memory storage implementation
+#[derive(Debug)]
+pub struct InMemoryRateLimitStorage {
+    api_storage: Arc<dyn ApiKeyStorage>,
+    states: DashMap<String, Arc<RateLimitState>>,
 }
 
 impl InMemoryRateLimitStorage {
-    fn new() -> Self {
+    pub fn new(api_storage: Arc<dyn ApiKeyStorage>) -> Self {
         Self {
-            counters: Arc::new(RwLock::new(HashMap::new())),
+            api_storage,
+            states: DashMap::new(),
         }
     }
 }
 
-/// Rate limiter implementation
-#[derive(Debug)]
-pub struct RateLimiter<S: ApiKeyStorage> {
-    storage: InMemoryRateLimitStorage,
-    config: RateLimitConfig,
-    key_storage: S,
+#[async_trait]
+impl RateLimitStorage for InMemoryRateLimitStorage {
+    async fn get_metadata(&self, key: &str) -> Result<(), RateLimitError> {
+        self.api_storage.get_metadata(key).await.map_err(|_| RateLimitError::InvalidKey)?;
+        Ok(())
+    }
+
+    async fn get_state(&self, key: &str) -> Option<Arc<RateLimitState>> {
+        self.states.get(key).map(|entry| entry.value().clone())
+    }
+
+    async fn set_state(&self, key: &str, state: Arc<RateLimitState>) {
+        self.states.insert(key.to_string(), state);
+    }
 }
 
-impl<S: ApiKeyStorage> RateLimiter<S> {
-    pub fn new(key_storage: S) -> Self {
+/// Main rate limiter implementation
+#[derive(Debug)]
+pub struct RateLimiter<S: RateLimitStorage> {
+    storage: S,
+    config: Arc<RateLimitConfig>,
+    time_provider: Arc<dyn TimeProvider>,
+}
+
+impl<S: RateLimitStorage> RateLimiter<S> {
+    pub fn new(storage: S) -> Self {
         Self {
-            storage: InMemoryRateLimitStorage::new(),
-            config: RateLimitConfig::default(),
-            key_storage,
+            storage,
+            config: Arc::new(RateLimitConfig::default()),
+            time_provider: Arc::new(SystemTimeProvider),
+        }
+    }
+
+    pub fn with_time_provider(storage: S, time_provider: Arc<dyn TimeProvider>) -> Self {
+        Self {
+            storage,
+            config: Arc::new(RateLimitConfig::default()),
+            time_provider,
         }
     }
 
     pub fn set_config(&mut self, config: RateLimitConfig) {
-        self.config = config;
+        self.config = Arc::new(config);
+    }
+
+    async fn get_or_create_state(&self, key: &str) -> Arc<RateLimitState> {
+        if let Some(state) = self.storage.get_state(key).await {
+            state
+        } else {
+            let current_time = self.time_provider.current_time();
+            let state = Arc::new(RateLimitState::new(current_time));
+            state.tokens.store(self.config.burst_size, Ordering::Relaxed);
+            self.storage.set_state(key, state.clone()).await;
+            state
+        }
     }
 
     /// Check if a request should be allowed based on rate limits
     pub async fn check_rate_limit(&self, key: &str) -> Result<(), RateLimitError> {
         // First verify the key exists
-        if self.key_storage.get_metadata(key).await.is_err() {
-            return Err(RateLimitError::InvalidKey);
-        }
+        self.storage.get_metadata(key).await?;
 
-        let mut counters = self.storage.counters.write().await;
-        let counter = counters.entry(key.to_string()).or_insert_with(RateLimitCounter::new);
+        let current_time = self.time_provider.current_time();
+        let state = self.get_or_create_state(key).await;
 
-        // Reset counter if window has expired
-        if counter.is_window_expired(self.config.window) {
-            counter.reset();
-        }
-
-        // Check if we've exceeded the rate limit
-        if counter.count >= self.config.max_requests {
+        // Check fixed window rate limit
+        if !state.check_window(
+            current_time,
+            self.config.window.num_seconds(),
+            self.config.max_requests,
+        ) {
             return Err(RateLimitError::RateLimitExceeded);
         }
 
-        // Check burst limit
-        if counter.burst_count >= self.config.burst_size {
+        // Check token bucket burst limit
+        let tokens = state.refill_tokens(
+            current_time,
+            self.config.refill_rate,
+            self.config.burst_size,
+        );
+
+        if tokens < 1 {
             return Err(RateLimitError::RateLimitExceeded);
         }
 
-        // Increment counter
-        counter.increment();
+        // Update counters
+        state.increment_counters();
+
         Ok(())
     }
+}
 
-    /// Get current rate limit status for a key
-    pub async fn get_status(&self, key: &str) -> Option<(u32, DateTime<Utc>)> {
-        let counters = self.storage.counters.read().await;
-        counters.get(key).map(|counter| (counter.count, counter.window_start))
-    }
-
-    /// Reset rate limit counter for a key
-    pub async fn reset_counter(&self, key: &str) {
-        let mut counters = self.storage.counters.write().await;
-        if let Some(counter) = counters.get_mut(key) {
-            counter.reset();
-        }
-    }
+#[derive(Debug, Error)]
+pub enum RateLimitError {
+    #[error("Rate limit exceeded")]
+    RateLimitExceeded,
+    #[error("Invalid API key")]
+    InvalidKey,
 } 

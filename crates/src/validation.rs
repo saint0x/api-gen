@@ -1,6 +1,7 @@
 use thiserror::Error;
 use chrono::{DateTime, Utc};
 use crate::generation::{Environment, validate_key_format, KeyGenerationError};
+use crate::hashing::{KeyHash, HashingError};
 
 #[derive(Error, Debug)]
 pub enum ApiKeyValidationError {
@@ -18,6 +19,8 @@ pub enum ApiKeyValidationError {
     EnvironmentMismatch,
     #[error("Invalid timestamp")]
     InvalidTimestamp,
+    #[error("Hash verification failed")]
+    HashVerificationFailed,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -28,18 +31,21 @@ pub struct ApiKeyMetadata {
     pub environment: Environment,
     pub is_active: bool,
     pub is_revoked: bool,
+    pub key_hash: String, // Store serialized hash
 }
 
 impl ApiKeyMetadata {
-    pub fn new(environment: Environment) -> Self {
-        Self {
+    pub fn new(environment: Environment, key: &str) -> Result<Self, HashingError> {
+        let key_hash = KeyHash::new(key)?;
+        Ok(Self {
             created_at: Utc::now(),
             last_used_at: None,
             expires_at: None,
             environment,
             is_active: true,
             is_revoked: false,
-        }
+            key_hash: key_hash.to_string(),
+        })
     }
 
     pub fn is_valid(&self) -> bool {
@@ -52,6 +58,11 @@ impl ApiKeyMetadata {
         } else {
             false
         }
+    }
+
+    pub fn verify_key(&self, key: &str) -> Result<bool, HashingError> {
+        let key_hash = KeyHash::from_string(&self.key_hash)?;
+        key_hash.verify(key)
     }
 }
 
@@ -83,6 +94,13 @@ pub fn validate_api_key(key: &str, metadata: &ApiKeyMetadata) -> Result<(), ApiK
             return Err(ApiKeyValidationError::InvalidFormat);
         }
         Err(_) => return Err(ApiKeyValidationError::InvalidFormat),
+    }
+
+    // Verify the key hash
+    match metadata.verify_key(key) {
+        Ok(true) => {},
+        Ok(false) => return Err(ApiKeyValidationError::InvalidFormat),
+        Err(_) => return Err(ApiKeyValidationError::HashVerificationFailed),
     }
 
     // Check key status

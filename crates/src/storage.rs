@@ -1,8 +1,9 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use thiserror::Error;
 use crate::validation::ApiKeyMetadata;
 use crate::generation::Environment;
+use crate::hashing::HashingError;
 
 #[derive(Error, Debug)]
 pub enum StorageError {
@@ -12,6 +13,8 @@ pub enum StorageError {
     KeyNotFound,
     #[error("Storage error: {0}")]
     StorageError(String),
+    #[error("Hash error: {0}")]
+    HashError(#[from] HashingError),
 }
 
 /// Trait defining the storage interface for API keys
@@ -45,52 +48,71 @@ impl InMemoryStorage {
             keys: Mutex::new(HashMap::new()),
         }
     }
+
+    async fn find_by_hash(&self, key: &str) -> Result<Option<(String, ApiKeyMetadata)>, StorageError> {
+        let keys = self.keys.lock().await;
+        let mut result = None;
+        
+        for (stored_key, metadata) in keys.iter() {
+            if metadata.verify_key(key).map_err(StorageError::HashError)? {
+                result = Some((stored_key.clone(), metadata.clone()));
+                break;
+            }
+        }
+        
+        Ok(result)
+    }
 }
 
 #[async_trait::async_trait]
 impl ApiKeyStorage for InMemoryStorage {
     async fn store_key(&self, key: &str, metadata: ApiKeyMetadata) -> Result<(), StorageError> {
-        let mut keys = self.keys.lock().map_err(|e| StorageError::StorageError(e.to_string()))?;
-        
-        if keys.contains_key(key) {
+        // Check if key exists first
+        if let Some(_) = self.find_by_hash(key).await? {
             return Err(StorageError::KeyExists);
         }
         
+        // Store the key
+        let mut keys = self.keys.lock().await;
         keys.insert(key.to_string(), metadata);
         Ok(())
     }
 
     async fn get_metadata(&self, key: &str) -> Result<ApiKeyMetadata, StorageError> {
-        let keys = self.keys.lock().map_err(|e| StorageError::StorageError(e.to_string()))?;
-        keys.get(key)
-            .cloned()
-            .ok_or(StorageError::KeyNotFound)
+        match self.find_by_hash(key).await? {
+            Some((_, metadata)) => Ok(metadata),
+            None => Err(StorageError::KeyNotFound),
+        }
     }
 
     async fn update_metadata(&self, key: &str, metadata: ApiKeyMetadata) -> Result<(), StorageError> {
-        let mut keys = self.keys.lock().map_err(|e| StorageError::StorageError(e.to_string()))?;
+        // Find the key first
+        let stored_key = match self.find_by_hash(key).await? {
+            Some((k, _)) => k,
+            None => return Err(StorageError::KeyNotFound),
+        };
         
-        if !keys.contains_key(key) {
-            return Err(StorageError::KeyNotFound);
-        }
-        
-        keys.insert(key.to_string(), metadata);
+        // Update the metadata
+        let mut keys = self.keys.lock().await;
+        keys.insert(stored_key, metadata);
         Ok(())
     }
 
     async fn delete_key(&self, key: &str) -> Result<(), StorageError> {
-        let mut keys = self.keys.lock().map_err(|e| StorageError::StorageError(e.to_string()))?;
+        // Find the key first
+        let stored_key = match self.find_by_hash(key).await? {
+            Some((k, _)) => k,
+            None => return Err(StorageError::KeyNotFound),
+        };
         
-        if !keys.contains_key(key) {
-            return Err(StorageError::KeyNotFound);
-        }
-        
-        keys.remove(key);
+        // Delete the key
+        let mut keys = self.keys.lock().await;
+        keys.remove(&stored_key);
         Ok(())
     }
 
     async fn list_keys(&self, environment: Environment) -> Result<Vec<String>, StorageError> {
-        let keys = self.keys.lock().map_err(|e| StorageError::StorageError(e.to_string()))?;
+        let keys = self.keys.lock().await;
         Ok(keys
             .iter()
             .filter(|(_, metadata)| metadata.environment == environment)

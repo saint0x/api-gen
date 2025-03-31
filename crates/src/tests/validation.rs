@@ -7,7 +7,7 @@ fn create_test_key() -> (String, ApiKeyMetadata) {
     // 52 - 15 - 8 = 29 chars needed for random
     let random = "abcdef1234567890abcdef1234567";  // exactly 29 chars
     let key = format!("{}{}{}", prefix, timestamp, random);
-    let metadata = ApiKeyMetadata::new(Environment::Test);
+    let metadata = ApiKeyMetadata::new(Environment::Test, &key).unwrap();
     (key, metadata)
 }
 
@@ -22,7 +22,7 @@ fn test_valid_key() {
 #[test]
 fn test_environment_mismatch() {
     let (key, _) = create_test_key();
-    let wrong_env_metadata = ApiKeyMetadata::new(Environment::Live);
+    let wrong_env_metadata = ApiKeyMetadata::new(Environment::Live, &key).unwrap();
     assert!(validate_api_key(&key, &wrong_env_metadata).is_err());
 }
 
@@ -49,15 +49,14 @@ fn test_expired_key() {
 
 #[test]
 fn test_key_validation() {
-    let key = generate_api_key(Environment::Test).unwrap();
-    let metadata = ApiKeyMetadata::new(Environment::Test);
+    let (key, metadata) = generate_api_key(Environment::Test).unwrap();
     assert!(validate_api_key(&key, &metadata).is_ok());
 }
 
 #[test]
 fn test_invalid_environment() {
-    let key = generate_api_key(Environment::Test).unwrap();
-    let metadata = ApiKeyMetadata::new(Environment::Live);
+    let (key, _) = generate_api_key(Environment::Test).unwrap();
+    let metadata = ApiKeyMetadata::new(Environment::Live, &key).unwrap();
     assert!(matches!(
         validate_api_key(&key, &metadata),
         Err(ApiKeyValidationError::EnvironmentMismatch)
@@ -66,8 +65,7 @@ fn test_invalid_environment() {
 
 #[test]
 fn test_revoked_key_generated() {
-    let key = generate_api_key(Environment::Test).unwrap();
-    let mut metadata = ApiKeyMetadata::new(Environment::Test);
+    let (key, mut metadata) = generate_api_key(Environment::Test).unwrap();
     metadata.is_revoked = true;
     assert!(matches!(
         validate_api_key(&key, &metadata),
@@ -77,8 +75,7 @@ fn test_revoked_key_generated() {
 
 #[test]
 fn test_inactive_key_generated() {
-    let key = generate_api_key(Environment::Test).unwrap();
-    let mut metadata = ApiKeyMetadata::new(Environment::Test);
+    let (key, mut metadata) = generate_api_key(Environment::Test).unwrap();
     metadata.is_active = false;
     assert!(matches!(
         validate_api_key(&key, &metadata),

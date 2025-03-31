@@ -2,6 +2,8 @@ use rand::{distributions::Alphanumeric, Rng};
 use thiserror::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Serialize, Deserialize};
+use crate::validation::ApiKeyMetadata;
+use crate::hashing::HashingError;
 
 #[derive(Error, Debug)]
 pub enum KeyGenerationError {
@@ -11,6 +13,8 @@ pub enum KeyGenerationError {
     GenerationFailed,
     #[error("Invalid key format")]
     InvalidFormat,
+    #[error("Failed to hash key: {0}")]
+    HashingError(#[from] HashingError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -40,16 +44,16 @@ impl TryFrom<&str> for Environment {
     }
 }
 
-/// Generates a new API key with the specified environment prefix.
+/// Generates a new API key with the specified environment prefix and returns both the key and its metadata.
 /// 
 /// # Examples
 /// ```
 /// use tronch::generation::{generate_api_key, Environment};
 /// 
-/// let api_key = generate_api_key(Environment::Test).unwrap();
+/// let (api_key, metadata) = generate_api_key(Environment::Test).unwrap();
 /// assert!(api_key.starts_with("tronch_sk_test_"));
 /// ```
-pub fn generate_api_key(env: Environment) -> Result<String, KeyGenerationError> {
+pub fn generate_api_key(env: Environment) -> Result<(String, ApiKeyMetadata), KeyGenerationError> {
     // Generate a timestamp component (8 chars)
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -77,7 +81,10 @@ pub fn generate_api_key(env: Environment) -> Result<String, KeyGenerationError> 
     // Validate the generated key
     validate_key_format(&key, None)?;
     
-    Ok(key)
+    // Create metadata with hash
+    let metadata = ApiKeyMetadata::new(env, &key)?;
+    
+    Ok((key, metadata))
 }
 
 /// Validates the format of an API key

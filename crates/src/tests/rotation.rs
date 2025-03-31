@@ -2,18 +2,11 @@ use crate::rotation::*;
 use crate::generation::Environment;
 use crate::validation::ApiKeyMetadata;
 use crate::storage::{InMemoryStorage, ApiKeyStorage};
-use chrono::{Duration, Utc};
+use chrono::Duration;
 
 async fn create_test_storage() -> InMemoryStorage {
     let storage = InMemoryStorage::new();
-    let metadata = ApiKeyMetadata {
-        created_at: Utc::now(),
-        last_used_at: None,
-        expires_at: None,
-        environment: Environment::Test,
-        is_active: true,
-        is_revoked: false,
-    };
+    let metadata = ApiKeyMetadata::new(Environment::Test, "test_key").unwrap();
     storage.store_key("test_key", metadata).await.unwrap();
     storage
 }
@@ -58,7 +51,7 @@ async fn test_rotate_nonexistent_key() {
 async fn test_rotate_revoked_key() {
     let storage = InMemoryStorage::new();
     let key = "test_key";
-    let mut metadata = ApiKeyMetadata::new(Environment::Test);
+    let mut metadata = ApiKeyMetadata::new(Environment::Test, key).unwrap();
     metadata.is_revoked = true;
     storage.store_key(key, metadata).await.unwrap();
 

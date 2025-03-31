@@ -2,7 +2,6 @@ use thiserror::Error;
 use chrono::{Duration, Utc};
 use crate::{
     generation::generate_api_key,
-    validation::ApiKeyMetadata,
     storage::ApiKeyStorage,
 };
 
@@ -66,18 +65,8 @@ pub async fn rotate_key(
     }
 
     // Generate new key in same environment
-    let new_key = generate_api_key(metadata.environment)
+    let (new_key, new_metadata) = generate_api_key(metadata.environment)
         .map_err(|_| KeyRotationError::GenerationFailed)?;
-
-    // Create metadata for new key
-    let new_metadata = ApiKeyMetadata {
-        created_at: Utc::now(),
-        last_used_at: None,
-        expires_at: None,
-        environment: metadata.environment,
-        is_active: true,
-        is_revoked: false,
-    };
 
     // Store new key
     storage

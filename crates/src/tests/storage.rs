@@ -1,20 +1,12 @@
 use crate::storage::*;
 use crate::validation::ApiKeyMetadata;
 use crate::generation::Environment;
-use chrono::Utc;
 
 #[tokio::test]
 async fn test_store_and_get_key() {
     let storage = InMemoryStorage::new();
     let key = "test_key";
-    let metadata = ApiKeyMetadata {
-        created_at: Utc::now(),
-        last_used_at: None,
-        expires_at: None,
-        environment: Environment::Test,
-        is_active: true,
-        is_revoked: false,
-    };
+    let metadata = ApiKeyMetadata::new(Environment::Test, key).unwrap();
 
     storage.store_key(key, metadata.clone()).await.unwrap();
     let retrieved = storage.get_metadata(key).await.unwrap();
@@ -33,14 +25,7 @@ async fn test_get_nonexistent_key() {
 async fn test_store_duplicate_key() {
     let storage = InMemoryStorage::new();
     let key = "test_key";
-    let metadata = ApiKeyMetadata {
-        created_at: Utc::now(),
-        last_used_at: None,
-        expires_at: None,
-        environment: Environment::Test,
-        is_active: true,
-        is_revoked: false,
-    };
+    let metadata = ApiKeyMetadata::new(Environment::Test, key).unwrap();
 
     storage.store_key(key, metadata.clone()).await.unwrap();
     let result = storage.store_key(key, metadata).await;
@@ -51,14 +36,7 @@ async fn test_store_duplicate_key() {
 async fn test_update_metadata() {
     let storage = InMemoryStorage::new();
     let key = "test_key";
-    let mut metadata = ApiKeyMetadata {
-        created_at: Utc::now(),
-        last_used_at: None,
-        expires_at: None,
-        environment: Environment::Test,
-        is_active: true,
-        is_revoked: false,
-    };
+    let mut metadata = ApiKeyMetadata::new(Environment::Test, key).unwrap();
 
     storage.store_key(key, metadata.clone()).await.unwrap();
     
@@ -75,23 +53,8 @@ async fn test_list_keys() {
     let test_key = "test_key";
     let live_key = "live_key";
     
-    let test_metadata = ApiKeyMetadata {
-        created_at: Utc::now(),
-        last_used_at: None,
-        expires_at: None,
-        environment: Environment::Test,
-        is_active: true,
-        is_revoked: false,
-    };
-    
-    let live_metadata = ApiKeyMetadata {
-        created_at: Utc::now(),
-        last_used_at: None,
-        expires_at: None,
-        environment: Environment::Live,
-        is_active: true,
-        is_revoked: false,
-    };
+    let test_metadata = ApiKeyMetadata::new(Environment::Test, test_key).unwrap();
+    let live_metadata = ApiKeyMetadata::new(Environment::Live, live_key).unwrap();
 
     storage.store_key(test_key, test_metadata).await.unwrap();
     storage.store_key(live_key, live_metadata).await.unwrap();
