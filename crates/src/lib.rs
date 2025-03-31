@@ -8,12 +8,14 @@ pub mod validation;
 pub mod audit;
 pub mod hashing;
 pub mod health;
+pub mod metrics;
 
 #[cfg(test)]
 mod tests {
     pub mod audit;
     pub mod hashing;
     pub mod health;
+    pub mod metrics;
     pub mod rate_limit;
     pub mod rotation;
 }
