@@ -40,20 +40,14 @@ impl TryFrom<&str> for Environment {
     }
 }
 
-/// Generates a cryptographically secure API key with proper prefixing
+/// Generates a new API key with the specified environment prefix.
 /// 
-/// # Arguments
-/// * `env` - The environment (test/live) for the key
-/// 
-/// # Returns
-/// * `Result<String, KeyGenerationError>` - The generated key or an error
-/// 
-/// # Example
+/// # Examples
 /// ```
-/// use tronch_api_key::generation::{generate_api_key, Environment};
+/// use tronch::generation::{generate_api_key, Environment};
 /// 
-/// let key = generate_api_key(Environment::Test).unwrap();
-/// assert!(key.starts_with("tronch_sk_test_"));
+/// let api_key = generate_api_key(Environment::Test).unwrap();
+/// assert!(api_key.starts_with("tronch_sk_test_"));
 /// ```
 pub fn generate_api_key(env: Environment) -> Result<String, KeyGenerationError> {
     // Generate a timestamp component (8 chars)
