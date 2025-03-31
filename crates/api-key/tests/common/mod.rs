@@ -16,9 +16,9 @@ pub fn create_test_key() -> (String, ApiKeyMetadata) {
 
 /// Creates a test storage with a single key
 #[allow(dead_code)]
-pub fn create_test_storage() -> (InMemoryStorage, String, ApiKeyMetadata) {
+pub async fn create_test_storage() -> (InMemoryStorage, String, ApiKeyMetadata) {
     let storage = InMemoryStorage::new();
     let (key, metadata) = create_test_key();
-    storage.store_key(&key, metadata.clone()).unwrap();
+    storage.store_key(&key, metadata.clone()).await.unwrap();
     (storage, key, metadata)
 } 
