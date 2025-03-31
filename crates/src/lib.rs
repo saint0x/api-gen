@@ -6,6 +6,7 @@ pub mod rotation;
 pub mod storage;
 pub mod validation;
 pub mod audit;
+pub mod hashing;
 
 #[cfg(test)]
 mod tests;

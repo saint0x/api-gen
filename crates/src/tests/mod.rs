@@ -6,4 +6,5 @@ pub mod request;
 pub mod generation;
 pub mod rate_limit;
 pub mod storage;
-pub mod rotation; 
+pub mod rotation;
+mod hashing; 
