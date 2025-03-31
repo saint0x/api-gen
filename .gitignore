@@ -39,6 +39,7 @@ coverage/
 *.db
 *.sqlite
 *.sqlite3
+store.json
 
 # Backup files
 *.bak
