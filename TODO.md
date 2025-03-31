@@ -66,11 +66,11 @@
 ## Phase 3: Security & Rate Limiting
 
 ### Rate Limiting Module
-- [ ] Set up Redis integration
 - [ ] Implement per-key rate limits
 - [ ] Add burst protection
 - [ ] Create rate limit headers
 - [ ] Add rate limit monitoring
+- [ ] Implement db logic (its in-memory currrently)
 
 ### Request Validation
 - ✅ Implement basic API key presence check

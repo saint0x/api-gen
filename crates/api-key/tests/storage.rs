@@ -1,7 +1,7 @@
 use tronch_api_key::{
     Environment,
     ApiKeyStorage,
-    StorageError,
+    storage::StorageError,
     ApiKeyMetadata,
     InMemoryStorage,
 };

@@ -16,7 +16,7 @@ pub enum StorageError {
 
 /// Trait defining the storage interface for API keys
 #[async_trait::async_trait]
-pub trait ApiKeyStorage: Send + Sync {
+pub trait ApiKeyStorage: Send + Sync + std::fmt::Debug {
     /// Store a new API key with its metadata
     async fn store_key(&self, key: &str, metadata: ApiKeyMetadata) -> Result<(), StorageError>;
     
@@ -34,7 +34,7 @@ pub trait ApiKeyStorage: Send + Sync {
 }
 
 /// In-memory storage implementation for testing
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct InMemoryStorage {
     keys: Mutex<HashMap<String, ApiKeyMetadata>>,
 }
