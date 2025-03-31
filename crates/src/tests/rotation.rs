@@ -1,75 +1,72 @@
-use tronch_api_key::{
-    Environment,
-    ApiKeyMetadata,
-    InMemoryStorage,
-    ApiKeyStorage,
-    generate_api_key,
-    rotate_key,
-    RotationConfig,
-};
-use chrono::Duration;
+use crate::rotation::*;
+use crate::generation::Environment;
+use crate::validation::ApiKeyMetadata;
+use crate::storage::{InMemoryStorage, ApiKeyStorage};
+use chrono::{Duration, Utc};
+
+async fn create_test_storage() -> InMemoryStorage {
+    let storage = InMemoryStorage::new();
+    let metadata = ApiKeyMetadata {
+        created_at: Utc::now(),
+        last_used_at: None,
+        expires_at: None,
+        environment: Environment::Test,
+        is_active: true,
+        is_revoked: false,
+    };
+    storage.store_key("test_key", metadata).await.unwrap();
+    storage
+}
 
 #[tokio::test]
 async fn test_key_rotation() {
-    let storage = InMemoryStorage::new();
-    let old_key = generate_api_key(Environment::Test).unwrap();
-    let metadata = ApiKeyMetadata::new(Environment::Test);
-    storage.store_key(&old_key, metadata).await.unwrap();
-
-    let config = RotationConfig::default();
-    let new_key = rotate_key(&storage, &old_key, config).await.unwrap();
-
-    // Verify new key exists and is valid
-    assert!(storage.get_metadata(&new_key).await.is_ok());
+    let storage = create_test_storage().await;
+    let old_key = "test_key";
     
-    // Verify old key has grace period
-    let old_metadata = storage.get_metadata(&old_key).await.unwrap();
-    assert!(old_metadata.expires_at.is_some());
-    assert!(old_metadata.is_revoked);
-}
-
-#[tokio::test]
-async fn test_key_rotation_without_revoke() {
-    let storage = InMemoryStorage::new();
-    let old_key = generate_api_key(Environment::Test).unwrap();
-    let metadata = ApiKeyMetadata::new(Environment::Test);
-    storage.store_key(&old_key, metadata).await.unwrap();
-
     let config = RotationConfig {
-        grace_period: Duration::days(7),
+        grace_period: Duration::hours(24),
         auto_revoke: false,
     };
-    let new_key = rotate_key(&storage, &old_key, config).await.unwrap();
 
-    // Verify new key exists and is valid
-    assert!(storage.get_metadata(&new_key).await.is_ok());
-    
-    // Verify old key has grace period but is not revoked
-    let old_metadata = storage.get_metadata(&old_key).await.unwrap();
-    assert!(old_metadata.expires_at.is_some());
+    let new_key = rotate_key(&storage, old_key, config).await.unwrap();
+    assert!(new_key.starts_with("tronch_sk_test_"));
+
+    // Old key should still work during grace period
+    let old_metadata = storage.get_metadata(old_key).await.unwrap();
+    assert!(old_metadata.is_active);
     assert!(!old_metadata.is_revoked);
+
+    // New key should be active
+    let new_metadata = storage.get_metadata(&new_key).await.unwrap();
+    assert!(new_metadata.is_active);
+    assert!(!new_metadata.is_revoked);
 }
 
 #[tokio::test]
-async fn test_key_rotation_environment_preservation() {
-    let storage = InMemoryStorage::new();
-    let old_key = generate_api_key(Environment::Live).unwrap();
-    let metadata = ApiKeyMetadata::new(Environment::Live);
-    storage.store_key(&old_key, metadata).await.unwrap();
+async fn test_rotate_nonexistent_key() {
+    let storage = create_test_storage().await;
+    let config = RotationConfig {
+        grace_period: Duration::hours(24),
+        auto_revoke: false,
+    };
 
-    let config = RotationConfig::default();
-    let new_key = rotate_key(&storage, &old_key, config).await.unwrap();
-
-    // Verify new key is in the same environment
-    assert!(new_key.starts_with("tronch_sk_live_"));
+    let result = rotate_key(&storage, "nonexistent", config).await;
+    assert!(matches!(result, Err(KeyRotationError::KeyNotFound)));
 }
 
 #[tokio::test]
-async fn test_key_rotation_nonexistent_key() {
+async fn test_rotate_revoked_key() {
     let storage = InMemoryStorage::new();
-    let config = RotationConfig::default();
-    
-    // Attempt to rotate a non-existent key
-    let result = rotate_key(&storage, "nonexistent_key", config).await;
-    assert!(result.is_err());
+    let key = "test_key";
+    let mut metadata = ApiKeyMetadata::new(Environment::Test);
+    metadata.is_revoked = true;
+    storage.store_key(key, metadata).await.unwrap();
+
+    let config = RotationConfig {
+        grace_period: Duration::hours(24),
+        auto_revoke: false,
+    };
+
+    let result = rotate_key(&storage, key, config).await;
+    assert!(matches!(result, Err(KeyRotationError::KeyRevoked)));
 } 

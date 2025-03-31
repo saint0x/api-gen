@@ -7,6 +7,9 @@ pub mod storage;
 pub mod validation;
 pub mod audit;
 
+#[cfg(test)]
+mod tests;
+
 pub use error::{ApiKeyError, Result};
 pub use generation::{generate_api_key, validate_key_format, Environment, KeyGenerationError};
 pub use rate_limit::{RateLimitConfig, RateLimiter};

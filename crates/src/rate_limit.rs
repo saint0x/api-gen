@@ -127,6 +127,10 @@ impl<S: ApiKeyStorage> RateLimiter<S> {
         }
     }
 
+    pub fn set_config(&mut self, config: RateLimitConfig) {
+        self.config = config;
+    }
+
     /// Check if a request should be allowed based on rate limits
     pub async fn check_rate_limit(&self, key: &str) -> Result<(), RateLimitError> {
         // First verify the key exists

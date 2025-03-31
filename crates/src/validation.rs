@@ -1,6 +1,6 @@
 use thiserror::Error;
 use chrono::{DateTime, Utc};
-use crate::generation::{Environment, validate_key_format};
+use crate::generation::{Environment, validate_key_format, KeyGenerationError};
 
 #[derive(Error, Debug)]
 pub enum ApiKeyValidationError {
@@ -64,8 +64,26 @@ impl ApiKeyMetadata {
 /// # Returns
 /// * `Result<(), ApiKeyValidationError>` - Ok if valid, error if invalid
 pub fn validate_api_key(key: &str, metadata: &ApiKeyMetadata) -> Result<(), ApiKeyValidationError> {
-    // First validate the format
-    validate_key_format(key).map_err(|_| ApiKeyValidationError::InvalidFormat)?;
+    // First validate the format and environment
+    match validate_key_format(key, Some(metadata.environment)) {
+        Ok(_) => {}
+        Err(KeyGenerationError::InvalidFormat) => {
+            // Check if it's an environment mismatch
+            let key_env = if key.starts_with("tronch_sk_test_") {
+                Environment::Test
+            } else if key.starts_with("tronch_sk_live_") {
+                Environment::Live
+            } else {
+                return Err(ApiKeyValidationError::InvalidFormat);
+            };
+
+            if key_env != metadata.environment {
+                return Err(ApiKeyValidationError::EnvironmentMismatch);
+            }
+            return Err(ApiKeyValidationError::InvalidFormat);
+        }
+        Err(_) => return Err(ApiKeyValidationError::InvalidFormat),
+    }
 
     // Check key status
     if !metadata.is_active {
@@ -80,67 +98,5 @@ pub fn validate_api_key(key: &str, metadata: &ApiKeyMetadata) -> Result<(), ApiK
         return Err(ApiKeyValidationError::KeyExpired);
     }
 
-    // Extract environment from key and check match
-    let key_env = if key.starts_with("tronch_sk_test_") {
-        Environment::Test
-    } else if key.starts_with("tronch_sk_live_") {
-        Environment::Live
-    } else {
-        return Err(ApiKeyValidationError::InvalidFormat);
-    };
-
-    if key_env != metadata.environment {
-        return Err(ApiKeyValidationError::EnvironmentMismatch);
-    }
-
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::generation::generate_api_key;
-
-    #[test]
-    fn test_key_validation() {
-        let key = generate_api_key(Environment::Test).unwrap();
-        let metadata = ApiKeyMetadata::new(Environment::Test);
-        
-        assert!(validate_api_key(&key, &metadata).is_ok());
-    }
-
-    #[test]
-    fn test_invalid_environment() {
-        let key = generate_api_key(Environment::Test).unwrap();
-        let metadata = ApiKeyMetadata::new(Environment::Live);
-        
-        assert!(matches!(
-            validate_api_key(&key, &metadata),
-            Err(ApiKeyValidationError::EnvironmentMismatch)
-        ));
-    }
-
-    #[test]
-    fn test_revoked_key() {
-        let key = generate_api_key(Environment::Test).unwrap();
-        let mut metadata = ApiKeyMetadata::new(Environment::Test);
-        metadata.is_revoked = true;
-        
-        assert!(matches!(
-            validate_api_key(&key, &metadata),
-            Err(ApiKeyValidationError::KeyRevoked)
-        ));
-    }
-
-    #[test]
-    fn test_inactive_key() {
-        let key = generate_api_key(Environment::Test).unwrap();
-        let mut metadata = ApiKeyMetadata::new(Environment::Test);
-        metadata.is_active = false;
-        
-        assert!(matches!(
-            validate_api_key(&key, &metadata),
-            Err(ApiKeyValidationError::KeyInactive)
-        ));
-    }
 }

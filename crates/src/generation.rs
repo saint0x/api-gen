@@ -75,7 +75,7 @@ pub fn generate_api_key(env: Environment) -> Result<String, KeyGenerationError> 
     let key = format!("{}{}{}", env.prefix(), timestamp, random);
     
     // Validate the generated key
-    validate_key_format(&key)?;
+    validate_key_format(&key, None)?;
     
     Ok(key)
 }
@@ -84,17 +84,40 @@ pub fn generate_api_key(env: Environment) -> Result<String, KeyGenerationError> 
 /// 
 /// # Arguments
 /// * `key` - The API key to validate
+/// * `expected_env` - The expected environment for the key
 /// 
 /// # Returns
 /// * `Result<(), KeyGenerationError>` - Ok if valid, error if invalid
-pub fn validate_key_format(key: &str) -> Result<(), KeyGenerationError> {
+pub fn validate_key_format(key: &str, expected_env: Option<Environment>) -> Result<(), KeyGenerationError> {
     // Check if key starts with valid prefix
-    if !key.starts_with("tronch_sk_test_") && !key.starts_with("tronch_sk_live_") {
+    let env = if key.starts_with("tronch_sk_test_") {
+        Environment::Test
+    } else if key.starts_with("tronch_sk_live_") {
+        Environment::Live
+    } else {
         return Err(KeyGenerationError::InvalidFormat);
+    };
+
+    // Check environment match if provided
+    if let Some(expected) = expected_env {
+        if env != expected {
+            return Err(KeyGenerationError::InvalidFormat);
+        }
     }
 
     // Check total length (should be 52 chars)
     if key.len() != 52 {
+        return Err(KeyGenerationError::InvalidFormat);
+    }
+
+    // Check that the key contains only alphanumeric characters after the prefix
+    let prefix_len = if key.starts_with("tronch_sk_test_") {
+        "tronch_sk_test_".len()
+    } else {
+        "tronch_sk_live_".len()
+    };
+
+    if !key[prefix_len..].chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err(KeyGenerationError::InvalidFormat);
     }
 

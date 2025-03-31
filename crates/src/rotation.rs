@@ -18,6 +18,8 @@ pub enum KeyRotationError {
     InvalidGracePeriod,
     #[error("Key not found")]
     KeyNotFound,
+    #[error("Key is revoked")]
+    KeyRevoked,
 }
 
 /// Configuration for key rotation
@@ -57,6 +59,11 @@ pub async fn rotate_key(
         .get_metadata(old_key)
         .await
         .map_err(|_| KeyRotationError::KeyNotFound)?;
+
+    // Check if key is revoked
+    if metadata.is_revoked {
+        return Err(KeyRotationError::KeyRevoked);
+    }
 
     // Generate new key in same environment
     let new_key = generate_api_key(metadata.environment)

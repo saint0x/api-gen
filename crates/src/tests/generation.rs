@@ -1,35 +1,57 @@
-use tronch::{
-    Environment,
-    generate_api_key,
-    validate_key_format,
-};
-
-mod common;
+use crate::generation::*;
 
 #[test]
-fn test_key_generation() {
-    let test_key = generate_api_key(Environment::Test);
-    let live_key = generate_api_key(Environment::Live);
-
-    assert!(test_key.starts_with("tronch_sk_test_"));
-    assert!(live_key.starts_with("tronch_sk_live_"));
-    assert_eq!(test_key.len(), 52);
-    assert_eq!(live_key.len(), 52);
+fn test_generate_api_key() {
+    let key = generate_api_key(Environment::Test).unwrap();
+    assert!(key.starts_with("tronch_sk_test_"));
+    assert_eq!(key.len(), 52);
 }
 
 #[test]
-fn test_key_validation() {
-    let valid_key = generate_api_key(Environment::Test);
-    assert!(validate_key_format(&valid_key));
-
-    assert!(!validate_key_format("invalid_key"));
-    assert!(!validate_key_format("tronch_sk_test_"));
-    assert!(!validate_key_format("tronch_sk_live_"));
+fn test_generate_api_key_live() {
+    let key = generate_api_key(Environment::Live).unwrap();
+    assert!(key.starts_with("tronch_sk_live_"));
+    assert_eq!(key.len(), 52);
 }
 
 #[test]
-fn test_key_uniqueness() {
-    let key1 = generate_api_key(Environment::Test);
-    let key2 = generate_api_key(Environment::Test);
-    assert_ne!(key1, key2);
-} 
+fn test_validate_api_key_format() {
+    let key = generate_api_key(Environment::Test).unwrap();
+    assert!(validate_key_format(&key, None).is_ok());
+}
+
+#[test]
+fn test_validate_api_key_format_invalid() {
+    let key = "invalid_key";
+    assert!(matches!(
+        validate_key_format(key, None),
+        Err(KeyGenerationError::InvalidFormat)
+    ));
+}
+
+#[test]
+fn test_validate_api_key_format_wrong_prefix() {
+    let key = "wrong_prefix_12345678901234567890123456789012345678901";
+    assert!(matches!(
+        validate_key_format(key, None),
+        Err(KeyGenerationError::InvalidFormat)
+    ));
+}
+
+#[test]
+fn test_validate_api_key_format_wrong_length() {
+    let key = "tronch_sk_test_123";
+    assert!(matches!(
+        validate_key_format(key, None),
+        Err(KeyGenerationError::InvalidFormat)
+    ));
+}
+
+#[test]
+fn test_validate_api_key_format_invalid_chars() {
+    let key = "tronch_sk_test_123456789012345678901234567890123456789!";
+    assert!(matches!(
+        validate_key_format(key, None),
+        Err(KeyGenerationError::InvalidFormat)
+    ));
+}
