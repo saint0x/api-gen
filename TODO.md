@@ -39,6 +39,13 @@
 - ✅ Set up environment separation
 - ✅ Add key format validation
 
+### Hashing Module
+- [ ] Implement Argon2id hashing with secure defaults
+- [ ] Add hashing configuration options
+- [ ] Add hashing benchmarks
+- [ ] Add hashing tests
+- [ ] Add salt generation and management
+
 ### Key Storage Module
 - ✅ Implement basic key storage (currently using in-memory storage)
 - ✅ Add basic key hashing
